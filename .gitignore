@@ -1,0 +1,52 @@
+# ── Secrets ──
+.streamlit/secrets.toml
+.env
+*.pem
+*.key
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# ── Données génomiques (volumineuses) ──
+*.ped
+*.map
+*.bed
+*.bim
+*.fam
+*.vcf
+*.vcf.gz
+*.bcf
+*.bam
+*.bai
+*.gff
+*.gff3
+*.gtf
+*.gz
+data/
+outputs/
+results/
+*.h5
+
+# ── IDE / OS ──
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ── R ──
+.Rhistory
+.RData
+.Rproj.user/
+
+# ── Streamlit ──
+.streamlit/secrets.toml

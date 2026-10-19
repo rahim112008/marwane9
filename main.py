@@ -1,4 +1,4 @@
-"""🐄 Bovine Genomics Pipeline v9.0 — SNP + SV + Agent IA multi-fournisseurs"""
+"""🐄 Bovine Genomics Pipeline v9.1 — SNP + SV + Agent IA"""
 import gzip, io, os, warnings, zipfile, subprocess, tempfile, shutil
 from collections import Counter
 from io import BytesIO
@@ -13,16 +13,22 @@ from scipy.optimize import minimize_scalar
 from scipy.stats import t as t_dist
 from sklearn.decomposition import NMF, PCA
 from sklearn.manifold import MDS as SklearnMDS
-from ai_agent import ask_agent, available_providers
+
+try:
+    from ai_agent import ask_agent, available_providers
+    AI_OK = True
+except Exception:
+    AI_OK = False
+    def ask_agent(*a, **k): return {"output":"ai_agent.py absent","provider_used":None,"steps":[],"error":"missing"}
+    def available_providers(): return []
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
-st.set_page_config(page_title="🐄 Bovine Pipeline v9.0", page_icon="🐄",
+st.set_page_config(page_title="🐄 Bovine Pipeline v9.1", page_icon="🐄",
                    layout="wide", initial_sidebar_state="expanded")
 
 ARS = {"1":158_534_110,"2":136_231_102,"3":121_005_158,"4":120_000_166,"5":120_089_699,"6":117_806_340,"7":110_682_743,"8":113_384_748,"9":105_708_134,"10":103_308_737,"11":107_310_763,"12":91_163_125,"13":84_246_514,"14":84_648_346,"15":85_207_080,"16":81_726_628,"17":75_176_999,"18":66_059_976,"19":64_089_169,"20":72_042_983,"21":71_599_096,"22":61_416_492,"23":52_531_573,"24":62_384_193,"25":42_959_610,"26":51_680_158,"27":46_772_073,"28":46_333_854,"29":51_319_414}
 AUTO = [str(i) for i in range(1,30)]
 
-# ── CACHE ──
 def _ha(x):
     if not isinstance(x,np.ndarray) or x.size==0: return "empty"
     if x.dtype.kind in ("U","S","O"): return f"a|{x.shape}|{'|'.join(map(str,x.ravel()[:2000]))}"
@@ -55,7 +61,6 @@ def _rt(raw):
     if len(raw)>=2 and raw[:2]==b"\x1f\x8b": return gzip.decompress(raw).decode("utf-8",errors="replace")
     return raw.decode("utf-8",errors="replace")
 
-# ── PARSING ──
 def sample_fid_iid(s, fp=2):
     n=str(s).strip()
     for e in (".CEL",".cel",".TXT",".txt",".gz",".GZ"):
@@ -182,7 +187,6 @@ def parse_sv_vcf(b):
     df=pd.DataFrame(svs); df["SIZE_KB"]=df["SVLEN"]/1000.0
     return df, samples
 
-# ── PHENOTYPE ──
 def load_pheno(b, fn=""):
     raw=gzip.decompress(b) if fn.endswith(".gz") else b
     text=raw.decode("utf-8",errors="replace"); sep="\t" if text.count("\t")>text.count(",") else ","
@@ -224,7 +228,6 @@ def rec_fid(ind):
     if df["FID"].nunique()<=1: df["FID"]=df["IID"].astype(str).str.split("_").str[0]
     return df
 
-# ── QC ──
 def miss_ind(g): return np.isnan(g).mean(axis=1)
 def miss_snp(g): return np.isnan(g).mean(axis=0)
 def maf(g): p=np.nanmean(g,axis=0)/2.0; return np.minimum(p,1.0-p)
@@ -282,7 +285,6 @@ def apply_qc(gt,ind_df,snp_df,params,rem_out=True):
         gt=gt[kp]; ind_df=ind_df[kp].reset_index(drop=True); tr["het"]=int(len(h)-len(ind_df))
     return gt,ind_df,snp_df,gp,ip,sp,{"n_ind_init":int(n0),"n_snp_init":int(m0),"n_ind_final":int(gt.shape[0]),"n_snp_final":int(gt.shape[1]),"excluded_ind":int(n0-gt.shape[0]),"excluded_snp":int(m0-gt.shape[1]),"trace":tr}
 
-# ── POP GEN ──
 @cache_data
 def fst_snp(gt,labels):
     pops=np.unique(labels); fst=np.full(gt.shape[1],np.nan)
@@ -350,7 +352,6 @@ def fst_pairwise(gt,labels):
             M[i,j]=M[j,i]=float(np.nanmean(fj))
     return M,pops
 
-# ── LD & DEMO ──
 @cache_data
 def ld_pruning(gt,w=50,step=5,r2=0.2):
     n=gt.shape[1]
@@ -431,7 +432,6 @@ def ne_historical(gt,snp_df,max_snp=2000):
     if len(df)>3: df["Ne"]=df["Ne"].rolling(3,center=True,min_periods=1).mean()
     return df
 
-# ── SÉLECTION ──
 @cache_data
 def windowed_fst(gt,snp_df,labels,w=50,step=25):
     fst=fst_snp(gt,labels); snp=snp_df.copy().reset_index(drop=True); n=min(len(snp),len(fst))
@@ -587,7 +587,6 @@ def gwas_pairwise(gt,snp_df,labels,ra,rb,maf_min=0.05,method="allelic"):
 def get_pairs(labels):
     r=sorted(pd.unique(labels).astype(str)); return r,[(r[i],r[j]) for i in range(len(r)) for j in range(i+1,len(r))]
 
-# ── GWAS & GBLUP ──
 def _vc_delta(Y,X0,K):
     n=len(Y); d,U=np.linalg.eigh(K); d=np.maximum(d,0); Yt=U.T@Y; X0t=U.T@X0
     def nll(dl):
@@ -709,7 +708,6 @@ def build_vcf(gt,ind_df,snp_df,proj="Bovine"):
         b.append(f"{r['CHR']}\t{int(r['BP'])}\t{r['SNP']}\tA\tG\t.\tPASS\t.\tGT\t"+"\t".join(gts))
     return "\n".join(h+b)+"\n"
 
-# ── VIZ ──
 def plot_missing(mi,ms):
     f=make_subplots(rows=1,cols=2,subplot_titles=("Missing/Ind","Missing/SNP"))
     f.add_trace(go.Histogram(x=mi,nbinsx=60,marker_color="skyblue"),1,1); f.add_trace(go.Histogram(x=ms,nbinsx=60,marker_color="coral"),1,2)
@@ -807,30 +805,7 @@ def plot_sv_by_chr(sv_df):
     counts=sv_df.groupby(["CHR","SVTYPE"]).size().reset_index(name="N")
     counts["_k"]=counts["CHR"].map(_chk); counts=counts.sort_values("_k").drop(columns="_k")
     return px.bar(counts,x="CHR",y="N",color="SVTYPE",title="Nombre de SV par chromosome")
-
-# ── R BRIDGE ──
-R_SCRIPTS={"qqman":'''suppressMessages({library(qqman);library(data.table)})
-args<-commandArgs(TRUE); df<-fread(args[1]); out<-args[2]
-df<-df[!is.na(df$P)&df$P>0,]
-png(paste0(out,"_manh.png"),2400,1400,res=200)
-manhattan(df,chr="CHR",bp="BP",snp="SNP",p="P",suggestiveline=-log10(1e-5),genomewideline=-log10(5e-8),col=c("grey30","grey60"),chrlabs=as.character(1:29))
-dev.off()
-png(paste0(out,"_qq.png"),1400,1400,res=200); qq(df$P); dev.off()
-cat("OK")'''}
-
-def r_available(): return shutil.which("Rscript") is not None
-def run_r(k,args,t=300):
-    if not r_available(): return "R non installé",False
-    tmp=None
-    try:
-        with tempfile.NamedTemporaryFile(mode="w",suffix=".R",delete=False) as f:
-            f.write(R_SCRIPTS[k]); tmp=f.name
-        r=subprocess.run(["Rscript",tmp]+[str(a) for a in args],capture_output=True,text=True,timeout=t)
-        return (r.stdout+r.stderr, r.returncode==0)
-    except Exception as e: return str(e),False
-    finally:
-        if tmp and os.path.exists(tmp): os.unlink(tmp)
-          # ═══════════════════════════════════════════════════════════════
+  # ═══════════════════════════════════════════════════════════════
 # §16 — INTERFACE STREAMLIT
 # ═══════════════════════════════════════════════════════════════
 
@@ -842,18 +817,18 @@ _KEYS = ["gt","ind_df","snp_df","gt_filt","ind_filt","snp_filt",
          "gebv_df","gblup_stats","ann_df","_plink","_vcf","mapping_df",
          "fst_snp_df","win_fst","taj_df","taj_race","css_df","pair_res",
          "nj_result","nj_mid","sel_gff","sel_ann","scan_df","sv_df","sv_samples",
-         "ai_history","ai_pending"]
+         "sv_ann","ai_pending"]
 
 def init_state():
     for k in _KEYS:
         if k not in st.session_state:
             st.session_state[k] = None
-    if "ai_history" not in st.session_state or st.session_state.ai_history is None:
-        st.session_state.ai_history = []
+    if st.session_state.get("ai_history") is None:
+        st.session_state["ai_history"] = []
 
 def main():
     init_state()
-    st.title("🐄 Bovine Genomics Pipeline v9.0")
+    st.title("🐄 Bovine Genomics Pipeline v9.1")
     st.caption("SNP · SV · GWAS · GBLUP · Signatures de sélection · Agent IA (Gemini + Groq)")
 
     # ── SIDEBAR ──
@@ -893,16 +868,16 @@ def main():
                 except Exception as e:
                     st.error(f"❌ {e}")
 
-        else:  # Axiom→PED
+        else:
             af = st.file_uploader("Axiom brut", type=["txt","csv","tsv","gz"])
             if af and st.button("🔄 Convertir"):
                 try:
                     s, g, ns = parse_axiom(af.read(), af.name)
                     mpl = [f"1\tSNP_{i+1:06d}\t0\t{i+1}" for i in range(ns)]
                     pdl = ["\t".join([sample_fid_iid(smp)[0],
-                                       sample_fid_iid(smp)[1],
-                                       "0","0","0","-9"] +
-                                      [a for pr in row for a in pr])
+                                      sample_fid_iid(smp)[1],
+                                      "0","0","0","-9"] +
+                                     [a for pr in row for a in pr])
                            for smp, row in zip(s, g)]
                     st.session_state["_plink_ped"] = "\n".join(pdl)+"\n"
                     st.session_state["_plink_map"] = "\n".join(mpl)+"\n"
@@ -918,7 +893,7 @@ def main():
         st.divider()
         st.header("📁 Données SV (optionnel)")
         svf = st.file_uploader("VCF SV (Manta/Delly)", type=["vcf","gz"],
-                                key="sv_vcf_upload")
+                               key="sv_vcf_upload")
         if svf and st.button("📥 Charger SV", use_container_width=True):
             try:
                 sv, samples = parse_sv_vcf(svf.read())
@@ -947,7 +922,7 @@ def main():
                     "📈 Démographie","🔍 Sélection","🧪 GWAS","🎯 Post-GWAS",
                     "📈 GBLUP","🧬 Annotation","🧬 SV","📤 Export","🤖 Agent IA"])
 
-    # ═══════════════ QC ═══════════════
+    # ═══════════════ TAB 0 — QC ═══════════════
     with tabs[0]:
         st.subheader("🧹 Contrôle Qualité")
         if st.button("▶ Lancer QC", type="primary"):
@@ -978,7 +953,7 @@ def main():
                 use_container_width=True)
             st.json(s["trace"])
 
-    # ═══════════════ LD ═══════════════
+    # ═══════════════ TAB 1 — LD ═══════════════
     with tabs[1]:
         st.subheader("✂️ LD Pruning & LD decay")
         if st.session_state.gt_filt is not None and st.button("▶ LD Pruning"):
@@ -1002,7 +977,7 @@ def main():
                 f = plot_ld(st.session_state.ld_df)
                 if f: st.plotly_chart(f, use_container_width=True)
 
-    # ═══════════════ Structure ═══════════════
+    # ═══════════════ TAB 2 — Structure ═══════════════
     with tabs[2]:
         st.subheader("🧬 Structure (PCA · MDS · KING)")
         if st.session_state.gt_filt is not None and st.button("▶ PCA + MDS + KING"):
@@ -1027,7 +1002,7 @@ def main():
                          st.session_state.ind_filt["FID"].values),
                 use_container_width=True)
 
-    # ═══════════════ Admixture ═══════════════
+    # ═══════════════ TAB 3 — Admixture ═══════════════
     with tabs[3]:
         st.subheader("🎨 Admixture NMF")
         if st.session_state.gt_filt is not None:
@@ -1048,7 +1023,7 @@ def main():
                                   st.session_state.admix_K)
                 st.plotly_chart(f, use_container_width=True)
 
-    # ═══════════════ Démographie ═══════════════
+    # ═══════════════ TAB 4 — Démographie ═══════════════
     with tabs[4]:
         st.subheader("📈 Démographie (ROH · Ne)")
         if st.session_state.gt_filt is not None and st.button("▶ ROH + Ne"):
@@ -1076,11 +1051,10 @@ def main():
                             title="Distribution FROH"),
                 use_container_width=True)
 
-    # ═══════════════ Sélection ═══════════════
+    # ═══════════════ TAB 5 — Sélection ═══════════════
     with tabs[5]:
         st.subheader("🔍 Sélection & structure des populations")
 
-        # FST pairwise
         if st.button("▶ FST pairwise + Reynolds"):
             try:
                 gu = st.session_state.gt_pruned if st.session_state.gt_pruned is not None \
@@ -1110,7 +1084,6 @@ def main():
             st.plotly_chart(plot_manhattan(dff, yc="FST", title="FST par SNP"),
                             use_container_width=True)
 
-        # Arbre NJ bootstrap
         st.divider()
         st.subheader("🌳 Arbre NJ (bootstrap + midpoint)")
         if st.session_state.reyn_D is not None:
@@ -1154,7 +1127,6 @@ def main():
                 st.download_button("⬇ .nwk", r["newick"].encode(),
                                   "tree.nwk", "text/plain")
 
-        # Signatures de sélection
         st.divider()
         st.subheader("🧬 Signatures de sélection")
         if st.session_state.gt_filt is not None:
@@ -1215,7 +1187,7 @@ def main():
                     st.dataframe(t.sort_values('TAJIMA_D').head(20),
                                 use_container_width=True)
 
-            else:  # composite
+            else:
                 if st.button("▶ Score composite"):
                     with st.spinner("Composite..."):
                         c = composite_score(gu, su, lab)
@@ -1230,7 +1202,6 @@ def main():
                         use_container_width=True)
                     st.dataframe(c.head(20), use_container_width=True)
 
-        # GWAS pairwise races
         st.divider()
         st.subheader("🧬 GWAS entre races")
         if st.session_state.gt_filt is not None:
@@ -1275,9 +1246,8 @@ def main():
                 except Exception as e:
                     st.error(f"❌ {e}")
 
-        # Annotation GFF3 dans Sélection
         st.divider()
-        st.subheader("🧬 Annotation GFF3 (intégrée)")
+        st.subheader("🧬 Annotation GFF3 (intégrée à Sélection)")
         gff_f = st.file_uploader("GFF3/GTF",
                                  type=["gff","gff3","gtf","gz"],
                                  key="sel_gff_file")
@@ -1355,12 +1325,13 @@ def main():
             except Exception as e:
                 st.error(f"❌ {e}")
         else:
-            st.info("💡 [Télécharger GFF3 bovin ARS-UCD1.2]"
-                    "(https://ftp.ensembl.org/pub/current_gff3/bos_taurus/)")
+            st.info("💡 Téléchargez le GFF3 bovin ARS-UCD1.2 depuis Ensembl : "
+                    "https://ftp.ensembl.org/pub/current_gff3/bos_taurus/")
 
-    # ═══════════════ GWAS ═══════════════
+    # ═══════════════ TAB 6 — GWAS ═══════════════
     with tabs[6]:
         st.subheader("🧪 GWAS (LMM-EMMAX / logistique)")
+
         st.markdown("**1️⃣ Mapping ID (optionnel)**")
         mf = st.file_uploader("CSV mapping (Animal + IID)",
                               type=["csv","txt"], key="gwas_map")
@@ -1442,7 +1413,7 @@ def main():
                         except Exception as e:
                             st.error(f"❌ {e}")
 
-    # ═══════════════ Post-GWAS ═══════════════
+    # ═══════════════ TAB 7 — Post-GWAS ═══════════════
     with tabs[7]:
         st.subheader("🎯 Post-GWAS — Fine-mapping (ABF)")
         if st.session_state.gwas_res is not None:
@@ -1453,7 +1424,7 @@ def main():
         else:
             st.warning("Lancez GWAS d'abord")
 
-    # ═══════════════ GBLUP ═══════════════
+    # ═══════════════ TAB 8 — GBLUP ═══════════════
     with tabs[8]:
         st.subheader("📈 GBLUP (REML + validation croisée)")
         if st.session_state.pheno_df is not None:
@@ -1477,7 +1448,7 @@ def main():
         else:
             st.warning("Chargez des phénotypes")
 
-    # ═══════════════ Annotation dédiée ═══════════════
+    # ═══════════════ TAB 9 — Annotation dédiée ═══════════════
     with tabs[9]:
         st.subheader("🧬 Annotation dédiée (GWAS/Sélection)")
         gff_f = st.file_uploader("GFF3/GTF", type=["gff","gff3","gtf","gz"],
@@ -1503,7 +1474,7 @@ def main():
             except Exception as e:
                 st.error(f"❌ {e}")
 
-    # ═══════════════ SV ═══════════════
+    # ═══════════════ TAB 10 — SV ═══════════════
     with tabs[10]:
         st.subheader("🧬 Variants Structurels (SV)")
         st.caption("Chargez un VCF SV (Manta/Delly) dans la sidebar pour visualiser.")
@@ -1527,7 +1498,6 @@ def main():
                               sv.to_csv(index=False).encode(),
                               "sv_variants.csv", "text/csv")
 
-            # Annotation SV avec GFF3
             st.divider()
             st.markdown("### 🧬 Annotation SV ↔ Gènes")
             gff_sv = st.file_uploader("GFF3/GTF (pour annotation SV)",
@@ -1557,12 +1527,151 @@ def main():
                 except Exception as e:
                     st.error(f"❌ {e}")
         else:
-            st.info("💡 Aucun SV chargé. Uploadez un VCF SV dans la sidebar "
-                    "(section « 📁 Données SV »).")
-            st.markdown("""
-            **Comment obtenir un VCF SV :**
-            ```bash
-            # Sur votre machine (Linux/Mac)
-            conda install -c bioconda delly
-            delly call -g ARS-UCD1.2.fa -o sv.bcf *.bam
-            bcftools convert -O v sv.bcf > sv_output.vcf
+            st.info("💡 Aucun SV chargé. Uploadez un VCF SV dans la sidebar (section 📁 Données SV).")
+            st.markdown("**Comment obtenir un VCF SV :**")
+            st.code(
+                "# Sur votre machine (Linux/Mac)\n"
+                "conda install -c bioconda delly\n"
+                "delly call -g ARS-UCD1.2.fa -o sv.bcf *.bam\n"
+                "bcftools convert -O v sv.bcf > sv_output.vcf",
+                language="bash"
+            )
+            st.caption("Puis uploadez `sv_output.vcf` dans la sidebar.")
+
+    # ═══════════════ TAB 11 — Export ═══════════════
+    with tabs[11]:
+        st.subheader("📤 Export")
+        if st.session_state.gt_filt is not None:
+            if st.button("📦 PLINK (.bed/.bim/.fam)"):
+                try:
+                    gu = st.session_state.gt_pruned if st.session_state.gt_pruned is not None \
+                         else st.session_state.gt_filt
+                    su = st.session_state.snp_pruned if st.session_state.snp_pruned is not None \
+                         else st.session_state.snp_filt
+                    st.session_state._plink = build_plink(gu, st.session_state.ind_filt, su)
+                    st.success("✅ PLINK prêt")
+                except Exception as e:
+                    st.error(f"❌ {e}")
+            if st.session_state._plink:
+                st.download_button("⬇ PLINK .zip",
+                                  st.session_state._plink,
+                                  "bovine_plink.zip", "application/zip")
+
+            if st.button("📄 VCF"):
+                try:
+                    gu = st.session_state.gt_pruned if st.session_state.gt_pruned is not None \
+                         else st.session_state.gt_filt
+                    su = st.session_state.snp_pruned if st.session_state.snp_pruned is not None \
+                         else st.session_state.snp_filt
+                    st.session_state._vcf = build_vcf(gu, st.session_state.ind_filt, su)
+                    st.success("✅ VCF prêt")
+                except Exception as e:
+                    st.error(f"❌ {e}")
+            if st.session_state._vcf:
+                st.download_button("⬇ VCF",
+                                  st.session_state._vcf.encode(),
+                                  "bovine.vcf", "text/plain")
+
+    # ═══════════════ TAB 12 — Agent IA ═══════════════
+    with tabs[12]:
+        st.subheader("🤖 Agent IA génomique")
+        st.caption("Gemini + Groq gratuits · fallback automatique · 7 outils "
+                   "(PubMed, FST, λGC, h², GWAS, stats, gènes)")
+
+        avail = available_providers() if AI_OK else []
+        if not avail:
+            st.error(
+                "⚠️ Aucune clé API détectée.\n\n"
+                "Ajoutez dans `.streamlit/secrets.toml` :\n"
+                "```toml\n"
+                "GOOGLE_API_KEY = \"AIza...\"\n"
+                "GROQ_API_KEY  = \"gsk_...\"\n"
+                "```\n\n"
+                "Clés gratuites : Gemini (aistudio.google.com/apikey) · "
+                "Groq (console.groq.com/keys)")
+            st.stop()
+
+        c1, c2, c3 = st.columns([2, 2, 1])
+        provider = c1.selectbox("Provider", avail)
+        if provider == "gemini":
+            model = c2.selectbox("Modèle",
+                ["gemini-2.5-flash", "gemini-3.1-flash-lite"])
+        else:
+            model = c2.text_input("Modèle", "openai/gpt-oss-120b")
+        fallback = c3.checkbox("Fallback", value=len(avail) > 1)
+
+        st.markdown("##### 🎯 Actions rapides")
+        qc1, qc2, qc3 = st.columns(3)
+        with qc1:
+            if st.button("📊 Résumer GWAS", use_container_width=True,
+                        disabled=st.session_state.gwas_res is None):
+                top = st.session_state.gwas_res.sort_values("P").head(10)
+                csv = top[["SNP","CHR","BP","P","BETA"]].to_csv(index=False)
+                st.session_state.ai_pending = (
+                    f"Résume ces top SNPs et dis-moi quels gènes "
+                    f"chercher dans PubMed :\n\n{csv}")
+        with qc2:
+            if st.button("🌍 Interpréter FST", use_container_width=True,
+                        disabled=st.session_state.fst is None):
+                mf_ = float(np.nanmean(st.session_state.fst))
+                st.session_state.ai_pending = (
+                    f"FST moyen = {mf_:.4f} entre races bovines. "
+                    f"Interprète et recommande la prochaine étape.")
+        with qc3:
+            if st.button("📈 Interpréter h²", use_container_width=True,
+                        disabled=st.session_state.gblup_stats is None):
+                h2 = st.session_state.gblup_stats.get("h2", 0.3)
+                st.session_state.ai_pending = (
+                    f"h² = {h2:.2f} pour rendement laitier bovin. Interprète.")
+
+        st.divider()
+
+        for msg in st.session_state.ai_history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg.get("provider"):
+                    st.caption(f"🔧 {msg['provider']}")
+                if msg.get("steps"):
+                    with st.expander(f"🔍 {len(msg['steps'])} outil(s)"):
+                        for action, obs in msg["steps"]:
+                            st.markdown(f"**`{action.tool}`** → "
+                                        f"`{action.tool_input}`")
+                            st.code(str(obs)[:400], language="text")
+
+        prompt = st.chat_input(
+            "Ex: Interprète λGC=1.08 et cherche PubMed sur DGAT1 bovin")
+        if st.session_state.get("ai_pending"):
+            prompt = st.session_state.pop("ai_pending")
+
+        if prompt:
+            st.session_state.ai_history.append(
+                {"role":"user", "content":prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            with st.chat_message("assistant"):
+                with st.spinner(f"Agent {provider}..."):
+                    r = ask_agent(prompt, provider=provider,
+                                  model=model, fallback=fallback)
+                st.markdown(r["output"])
+                if r["provider_used"]:
+                    st.caption(f"🔧 {r['provider_used']}")
+                if r["steps"]:
+                    with st.expander(f"🔍 {len(r['steps'])} outil(s)"):
+                        for action, obs in r["steps"]:
+                            st.markdown(f"**`{action.tool}`** → "
+                                        f"`{action.tool_input}`")
+                            st.code(str(obs)[:400], language="text")
+            st.session_state.ai_history.append({
+                "role":"assistant",
+                "content":r["output"],
+                "provider":r["provider_used"],
+                "steps":r["steps"]})
+
+        if st.session_state.ai_history:
+            if st.button("🗑️ Effacer la conversation"):
+                st.session_state.ai_history = []
+                st.rerun()
+
+
+if __name__ == "__main__":
+    main()
